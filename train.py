@@ -20,7 +20,7 @@ def main(epochs, batch_size, learning_rate, save_freq, data_dir):
     posenet = PoseNet().to(device)
 
     # loss function
-    criterion = PoseLoss(0.3, 0.3, 1., 300, 300, 300)
+    criterion = PoseLoss(0.3, 0.3, 1., 300)
 
     # train the network
     optimizer = torch.optim.Adam(nn.ParameterList(posenet.parameters()),

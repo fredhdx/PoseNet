@@ -4,6 +4,8 @@ import torch.nn.functional as F
 
 import pickle
 
+from torchsummary import summary
+
 
 def init(key, module, weights=None):
     if weights == None:
@@ -43,7 +45,7 @@ class InceptionBlock(nn.Module):
         # 1x1 conv branch
         self.b1 = nn.Sequential(
             init(f'inception_{key}/1x1',
-                nn.Conv2d(in_channels=in_channels, out_channels=n1x1, kernel_size=1, stride=1, padding=0),
+                nn.Conv2d(in_channels, n1x1, kernel_size=1, stride=1, padding=0),
                 weights
             ),
             nn.ReLU()
@@ -52,12 +54,12 @@ class InceptionBlock(nn.Module):
         # 1x1 -> 3x3 conv branch
         self.b2 = nn.Sequential(
             init(f'inception_{key}/3x3_reduce',
-                nn.Conv2d(in_channels=in_channels, out_channels=n3x3red, kernel_size=1, stride=1, padding=0),
+                nn.Conv2d(in_channels, n3x3red, kernel_size=1, stride=1, padding=0),
                 weights
             ),
             nn.ReLU(),
             init(f'inception_{key}/3x3',
-                nn.Conv2d(in_channels=n3x3red, out_channels=n3x3, kernel_size=3, stride=1, padding=1),
+                nn.Conv2d(n3x3red, n3x3, kernel_size=3, stride=1, padding=1),
                 weights
             ),
             nn.ReLU()
@@ -66,12 +68,12 @@ class InceptionBlock(nn.Module):
         # 1x1 -> 5x5 conv branch
         self.b3 = nn.Sequential(
             init(f'inception_{key}/5x5_reduce',
-                nn.Conv2d(in_channels=in_channels, out_channels=n5x5red, kernel_size=1, stride=1, padding=0),
+                nn.Conv2d(in_channels, n5x5red, kernel_size=1, stride=1, padding=0),
                 weights
             ),
             nn.ReLU(),
             init(f'inception_{key}/5x5',
-                nn.Conv2d(in_channels=n5x5red, out_channels=n5x5, kernel_size=5, stride=1, padding=2),
+                nn.Conv2d(n5x5red, n5x5, kernel_size=5, stride=1, padding=2),
                 weights
             ),
             nn.ReLU()
@@ -82,7 +84,7 @@ class InceptionBlock(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             init(f'inception_{key}/pool_proj',
-                nn.Conv2d(in_channels=in_channels, out_channels=pool_planes, kernel_size=1, stride=1, padding=0),
+                nn.Conv2d(in_channels, pool_planes, kernel_size=1, stride=1, padding=0),
                 weights
             ),
             nn.ReLU()
@@ -114,12 +116,12 @@ class LossHeader(nn.Module):
             self.loss_header = nn.Sequential(
                 nn.AvgPool2d(kernel_size=5, stride=3, padding=0),
                 nn.ReLU(),
-                init(f'loss{key}/conv',
+                init('loss1/conv',
                      nn.Conv2d(in_channels=512, out_channels=128, kernel_size=1, stride=1, padding=0),
                      weights),
                 nn.ReLU(),
                 nn.Flatten(),
-                init(f'loss1/fc', nn.Linear(2048, 1024), weights),
+                init('loss1/fc', nn.Linear(2048, 1024), weights),
                 nn.Dropout(0.7)
             )
             self.fc_3 = nn.Linear(1024, 3)
@@ -128,12 +130,12 @@ class LossHeader(nn.Module):
             self.loss_header = nn.Sequential(
                 nn.AvgPool2d(kernel_size=5, stride=3, padding=0),
                 nn.ReLU(),
-                init(f'loss2/conv',
+                init('loss2/conv',
                      nn.Conv2d(in_channels=528, out_channels=128, kernel_size=1, stride=1, padding=0),
                      weights),
                 nn.ReLU(),
                 nn.Flatten(),
-                init(f'loss{key}/fc', nn.Linear(2048, 1024), weights),
+                init('loss2/fc', nn.Linear(2048, 1024), weights),
                 nn.Dropout(0.7)
             )
             self.fc_3 = nn.Linear(1024, 3)
@@ -204,8 +206,7 @@ class PoseNet(nn.Module):
 
         self._5a = InceptionBlock(832, 256, 160, 320, 32, 128, 128, "5a", weights)
         self._5b = InceptionBlock(832, 384, 192, 384, 48, 128, 128, "5b", weights)
-        self._avgpool5 = nn.AvgPool2d(kernel_size=7, stride=1, padding=3)
-        self._relu5 = nn.ReLU()
+
 
         self.loss1 = LossHeader(key=1, weights=weights)
         self.loss2 = LossHeader(key=2, weights=weights)
@@ -254,6 +255,9 @@ class PoseNet(nn.Module):
         # loss 3
         loss3_xyz, loss3_wpqr = self.loss3(x)
 
+        print(f'loss1_xyz', loss1_xyz.shape)
+        print(f'loss1_wpqr', loss1_wpqr.shape)
+
         if self.training:
             return loss1_xyz, \
                    loss1_wpqr, \
@@ -267,14 +271,12 @@ class PoseNet(nn.Module):
 
 
 class PoseLoss(nn.Module):
-    def __init__(self, w1_xyz, w2_xyz, w3_xyz, w1_wpqr, w2_wpqr, w3_wpqr):
+    def __init__(self, w1_xyz, w2_xyz, w3_xyz, beta):
         super(PoseLoss, self).__init__()
         self.w1_xyz = w1_xyz
         self.w2_xyz = w2_xyz
         self.w3_xyz = w3_xyz
-        self.w1_wpqr = w1_wpqr
-        self.w2_wpqr = w2_wpqr
-        self.w3_wpqr = w3_wpqr
+        self.beta = beta
 
 
     def forward(self, p1_xyz, p1_wpqr, p2_xyz, p2_wpqr, p3_xyz, p3_wpqr, poseGT):
@@ -289,15 +291,15 @@ class PoseLoss(nn.Module):
 
         # loss 1
         l1_xyz = mse(p1_xyz, xyz_gt)
-        l1_wpqr = mse(p1_wpqr, wpqr_gt_norm) * self.w1_wpqr
+        l1_wpqr = mse(p1_wpqr, wpqr_gt_norm) * self.beta
 
         # loss 2
         l2_xyz = mse(p2_xyz, xyz_gt)
-        l2_wpqr = mse(p2_wpqr, wpqr_gt_norm) * self.w2_wpqr
+        l2_wpqr = mse(p2_wpqr, wpqr_gt_norm) * self.beta
 
         # loss 3
         l3_xyz = mse(p3_xyz, xyz_gt)
-        l3_wpqr = mse(p3_wpqr, wpqr_gt_norm) * self.w3_wpqr
+        l3_wpqr = mse(p3_wpqr, wpqr_gt_norm) * self.beta
 
         loss = self.w1_xyz*(l1_xyz+l1_wpqr) + self.w2_xyz*(l2_xyz+l2_wpqr) + self.w3_xyz*(l3_xyz+l3_wpqr)
         return loss

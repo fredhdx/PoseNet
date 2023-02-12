@@ -5,7 +5,7 @@ from PIL import Image
 import numpy as np
 
 class DataSource(data.Dataset):
-    def __init__(self, root, resize=256, crop_size=224, train=True):
+    def __init__(self, root, resize=256, crop_size=224, train=True, pickle=None):
         self.root = os.path.expanduser(root)
         self.resize = resize
         self.crop_size = crop_size
